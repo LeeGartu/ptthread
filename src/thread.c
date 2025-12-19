@@ -52,6 +52,8 @@ static void (*rt_thread_suspend_hook)(rt_thread_t thread);
 static void (*rt_thread_resume_hook) (rt_thread_t thread);
 static void (*rt_thread_inited_hook) (rt_thread_t thread);
 
+static __thread rt_thread_t rt_current_thread = NULL;
+
 // 主线程：控制暂停/恢复
 void pause_thread(thread_control_t *ctrl) {
     pthread_mutex_lock(&ctrl->mutex);
@@ -252,12 +254,18 @@ rt_thread_t rt_thread_self(void)
     rt_hw_local_irq_enable(lock);
     return self;
 #else
-    extern rt_thread_t rt_current_thread;
 
     return rt_current_thread;
 #endif /* RT_USING_SMP */
 }
 RTM_EXPORT(rt_thread_self);
+
+static void *thread_wrapper(void *arg) {
+    rt_current_thread = (rt_thread_t)arg;;  // 绑定当前线程上下文
+    rt_current_thread->entry(rt_current_thread->parameter);
+
+    return NULL;
+}
 
 /**
  * @brief   This function will start a thread and put it to system ready queue.
@@ -273,9 +281,8 @@ rt_err_t rt_thread_startup(rt_thread_t thread)
     RT_ASSERT(thread != RT_NULL);
     RT_ASSERT((thread->stat & RT_THREAD_STAT_MASK) == RT_THREAD_INIT);
     RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
-
     /* calculate priority attribute */
-    
+    pthread_create(&thread->tid, NULL, thread_wrapper, thread);
 
     return RT_EOK;
 }
@@ -452,37 +459,9 @@ RTM_EXPORT(rt_thread_yield);
  */
 rt_err_t rt_thread_sleep(rt_tick_t tick)
 {
-    rt_base_t level;
-    struct rt_thread *thread;
+    usleep(tick*1000);
 
-    /* set to current thread */
-    thread = rt_thread_self();
-    RT_ASSERT(thread != RT_NULL);
-    RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    /* reset thread error */
-    thread->error = RT_EOK;
-
-    /* suspend thread */
-    rt_thread_suspend(thread);
-
-    /* reset the timeout of thread timer and start it */
-    rt_timer_control(&(thread->thread_timer), RT_TIMER_CTRL_SET_TIME, &tick);
-    rt_timer_start(&(thread->thread_timer));
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
-
-    rt_schedule();
-
-    /* clear error number of this thread to RT_EOK */
-    if (thread->error == -RT_ETIMEOUT)
-        thread->error = RT_EOK;
-
-    return thread->error;
+    return RT_EOK;
 }
 
 /**

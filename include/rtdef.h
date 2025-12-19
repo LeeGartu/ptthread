@@ -51,6 +51,7 @@
 
 #include <rtconfig.h>
 #ifdef RT_USING_LIBC
+#include <unistd.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdio.h>
@@ -650,7 +651,8 @@ struct rt_thread
 
     /* stack point and entry */
     void       *sp;                                     /**< stack point */
-    void       *entry;                                  /**< entry */
+    // void       *entry;                                  /**< entry */
+    void (*entry)(void *parameter);
     void       *parameter;                              /**< parameter */
     void       *stack_addr;                             /**< stack address */
     rt_uint32_t stack_size;                             /**< stack size */

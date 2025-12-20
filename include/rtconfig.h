@@ -18,6 +18,9 @@
 #define RT_TIMER_THREAD_PRIO 4
 #define RT_TIMER_THREAD_STACK_SIZE 4096
 #define RT_USING_LIBC
+#define RT_USING_CONSOLE
+#define RT_CONSOLEBUF_SIZE 1024
+#define RT_DEBUG_INIT 1
 
 /* Inter-Thread communication */
 
@@ -47,7 +50,6 @@
 /* RT-Thread Components */
 
 #define RT_USING_COMPONENTS_INIT
-#define RT_USING_USER_MAIN
 #define RT_MAIN_THREAD_STACK_SIZE 2048
 #define RT_MAIN_THREAD_PRIORITY 10
 

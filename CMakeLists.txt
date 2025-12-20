@@ -18,5 +18,7 @@ target_include_directories(ptthread PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/components/drivers/include/dirvers/
 )
 
+target_link_libraries(ptthread PUBLIC libserialport)
+
 # 如果需要，可以在这里定义编译选项
 target_compile_definitions(ptthread PUBLIC)

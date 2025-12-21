@@ -10,13 +10,13 @@
  */
 
 #include <rtthread.h>
-#include <dfs_file.h>
 #include <unistd.h>
 
 #include <ulog.h>
 #include <ulog_be.h>
 
 #ifdef ULOG_BACKEND_USING_FILE
+#include <dfs_file.h>
 
 #if defined(ULOG_ASYNC_OUTPUT_THREAD_STACK) && (ULOG_ASYNC_OUTPUT_THREAD_STACK < 2048)
 #error "The value of ULOG_ASYNC_OUTPUT_THREAD_STACK must be greater than 2048."

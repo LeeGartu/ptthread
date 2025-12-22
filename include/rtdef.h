@@ -747,13 +747,9 @@ typedef struct rt_semaphore *rt_sem_t;
 struct rt_mutex
 {
     struct rt_ipc_object parent;                        /**< inherit from ipc_object */
-
-    rt_uint16_t          value;                         /**< value of mutex */
-
-    rt_uint8_t           original_priority;             /**< priority of last thread hold the mutex */
-    rt_uint8_t           hold;                          /**< numbers of thread hold the mutex */
-
-    struct rt_thread    *owner;                         /**< current owner of mutex */
+    
+    pthread_mutex_t mutex;
+    pthread_mutexattr_t attr;
 };
 typedef struct rt_mutex *rt_mutex_t;
 #endif /* RT_USING_MUTEX */

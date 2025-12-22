@@ -25,7 +25,7 @@ target_include_directories(ptthread PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/components/utilities/ulog/backend/
     ${CMAKE_CURRENT_SOURCE_DIR}/components/drivers/include/
     ${CMAKE_CURRENT_SOURCE_DIR}/components/drivers/include/ipc/
-    ${CMAKE_CURRENT_SOURCE_DIR}/components/drivers/include/dirvers/
+    ${CMAKE_CURRENT_SOURCE_DIR}/components/drivers/include/drivers/
 )
 
 target_link_libraries(ptthread PUBLIC libserialport)

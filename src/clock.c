@@ -33,6 +33,24 @@ static volatile rt_tick_t rt_tick = 0;
 #if defined(RT_USING_HOOK) && defined(RT_HOOK_USING_FUNC_PTR)
 static void (*rt_tick_hook)(void);
 
+void *rt_tick_ptthread(void *param)
+{
+    rt_tick_t tick = 0;
+    while (1) {
+        tick++;
+        rt_tick_set(tick);
+        rt_thread_delay(1);
+    }
+}
+
+int rt_tick_ptthread_init(void)
+{
+    pthread_t tid;
+    pthread_create(&tid, NULL, rt_tick_ptthread, NULL);
+    return 0;
+}
+INIT_BOARD_EXPORT(rt_tick_ptthread_init);
+
 /**
  * @addtogroup Hook
  */

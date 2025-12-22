@@ -34,9 +34,13 @@
 #define COMPONENTS_LEVEL 7
 
 #if RT_DEBUG_INIT
-const struct rt_init_desc *components_array[COMPONENTS_LEVEL][COMPONENTS_ARRAY_MAX];
+#define COMPOENENTS_TYPE const struct rt_init_desc*
+#else
+#define COMPOENENTS_TYPE const init_fn_t*
+#endif /* RT_DEBUG_INIT */
+COMPOENENTS_TYPE components_array[COMPONENTS_LEVEL][COMPONENTS_ARRAY_MAX];
 int components_num[COMPONENTS_LEVEL];
-void register_components(const struct rt_init_desc *desc, char *level)
+void register_components(COMPOENENTS_TYPE desc, char *level)
 {
     int idx = level[0]-'0';
     if (components_num[idx] < COMPONENTS_ARRAY_MAX) {
@@ -44,60 +48,15 @@ void register_components(const struct rt_init_desc *desc, char *level)
         components_num[idx]++;
     }
 }
-#else
-const init_fn_t *components_array[6][COMPONENTS_ARRAY_MAX];
-int components_num[6];
-void register_components(const init_fn_t *desc, char *level)
-{
-    int idx = level[0]-'0';
-    if (components_num[idx] < COMPONENTS_ARRAY_MAX) {
-        components_array[idx][components_num[idx]] = desc;
-        components_num[idx]++;
-    }
-}
-#endif /* RT_DEBUG_INIT */
 
-
-/**
- * @brief  Onboard components initialization. In this function, the board-level
- *         initialization function will be called to complete the initialization
- *         of the on-board peripherals.
- */
-void rt_components_board_init(void)
+void __rt_components_init(int init_start, int init_end)
 {
 #if RT_DEBUG_INIT
     int result;
     const struct rt_init_desc *desc;
 
     rt_kprintf("do components initialization.\n");
-    rt_kprintf("components_num[%d]:%d\n", 1, components_num[1]);
-    for (int j = 0; j < components_num[1]; j ++) {
-        desc = components_array[1][j];
-        rt_kprintf("initialize %s", desc->fn_name);
-        result = desc->fn();
-        rt_kprintf(":%d done\n", result);
-    }
-#else
-    volatile const init_fn_t *fn_ptr;
-
-    for (int j = 0; j < components_num[1]; j ++) {
-        fn_ptr = components_array[1][j];
-        (*fn_ptr)();
-    }
-#endif /* RT_DEBUG_INIT */
-}
-
-/**
- * @brief  RT-Thread Components Initialization.
- */
-void rt_components_init(void)
-{
-#if RT_DEBUG_INIT
-    int result;
-    const struct rt_init_desc *desc;
-
-    rt_kprintf("do components initialization.\n");
-    for (int i = 2; i < COMPONENTS_LEVEL; i ++) {
+    for (int i = init_start; i < init_end; i ++) {
         rt_kprintf("components_num[%d]:%d\n", i, components_num[i]);
         for (int j = 0; j < components_num[i]; j ++) {
             desc = components_array[i][j];
@@ -109,12 +68,30 @@ void rt_components_init(void)
 #else
     volatile const init_fn_t *fn_ptr;
 
-    for (int i = 2; i < 6; i ++) {
-        for (int j = 2; j < components_num[i]; j ++) {
+    for (int i = init_start; i < init_end; i ++) {
+        for (int j = 0; j < components_num[i]; j ++) {
             fn_ptr = components_array[i][j];
             (*fn_ptr)();
         }
     }
 #endif /* RT_DEBUG_INIT */
+}
+
+/**
+ * @brief  Onboard components initialization. In this function, the board-level
+ *         initialization function will be called to complete the initialization
+ *         of the on-board peripherals.
+ */
+void rt_components_board_init(void)
+{
+    __rt_components_init(0,1);
+}
+
+/**
+ * @brief  RT-Thread Components Initialization.
+ */
+void rt_components_init(void)
+{
+    __rt_components_init(1,COMPONENTS_LEVEL);
 }
 #endif /* RT_USING_COMPONENTS_INIT */

@@ -20,7 +20,6 @@
 #define RT_USING_LIBC
 #define RT_USING_CONSOLE
 #define RT_CONSOLEBUF_SIZE 1024
-#define RT_DEBUG_INIT 1
 
 /* Inter-Thread communication */
 
@@ -50,10 +49,12 @@
 /* RT-Thread Components */
 
 #define RT_USING_COMPONENTS_INIT
+#define RT_DEBUG_INIT 0
 #define RT_MAIN_THREAD_STACK_SIZE 2048
 #define RT_MAIN_THREAD_PRIORITY 10
 #define RT_USING_ULOG
 #define ULOG_USING_COLOR
+#define ULOG_USING_FILTER
 #define ULOG_OUTPUT_LVL LOG_LVL_DBG
 #define ULOG_OUTPUT_TIME
 #define ULOG_OUTPUT_LEVEL

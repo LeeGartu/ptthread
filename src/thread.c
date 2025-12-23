@@ -179,6 +179,51 @@ static rt_err_t _thread_init(struct rt_thread *thread,
                              rt_uint8_t        priority,
                              rt_uint32_t       tick)
 {
+    /* init thread list */
+    rt_list_init(&(thread->tlist));
+
+    thread->entry = (void *)entry;
+    thread->parameter = parameter;
+    pthread_mutex_init(&thread->mutex, NULL);
+    pthread_cond_init(&thread->cond, NULL);
+
+    /* stack init */
+    thread->stack_addr = stack_start;
+    thread->stack_size = stack_size;
+
+    /* priority init */
+    RT_ASSERT(priority < RT_THREAD_PRIORITY_MAX);
+    thread->current_priority = priority;
+
+    thread->number_mask = 0;
+
+#ifdef RT_USING_EVENT
+    thread->event_set = 0;
+    thread->event_info = 0;
+#endif /* RT_USING_EVENT */
+
+    /* tick init */
+    thread->init_tick      = tick;
+    thread->remaining_tick = tick;
+
+    /* error and flags */
+    thread->error = RT_EOK;
+    thread->stat  = RT_THREAD_INIT;
+
+    /* initialize cleanup function and user data */
+    thread->cleanup   = 0;
+    thread->user_data = 0;
+
+    /* initialize thread timer */
+    rt_timer_init(&(thread->thread_timer),
+                  thread->name,
+                  _thread_timeout,
+                  thread,
+                  0,
+                  RT_TIMER_FLAG_ONE_SHOT);
+
+    RT_OBJECT_HOOK_CALL(rt_thread_inited_hook, (thread));
+
     return RT_EOK;
 }
 
@@ -366,12 +411,15 @@ rt_thread_t rt_thread_create(const char *name,
 
     thread = (struct rt_thread *)rt_object_allocate(RT_Object_Class_Thread,
                                                     name);
-    
-    thread->entry = entry;
-    thread->parameter = parameter;
-    thread->suspended = 0;
-    pthread_mutex_init(&thread->mutex, NULL);
-    pthread_cond_init(&thread->cond, NULL);
+
+    _thread_init(thread,
+                 name,
+                 entry,
+                 parameter,
+                 stack_start,
+                 stack_size,
+                 priority,
+                 tick);
 
     return thread;
 }
@@ -702,7 +750,7 @@ RTM_EXPORT(rt_thread_control);
 rt_err_t rt_thread_suspend(rt_thread_t thread)
 {
     pthread_mutex_lock(&thread->mutex);
-    thread->suspended = 1;
+    thread->stat = RT_THREAD_SUSPEND | (thread->stat & ~RT_THREAD_STAT_MASK);
     pthread_mutex_unlock(&thread->mutex);
     return RT_EOK;
 }
@@ -719,7 +767,7 @@ RTM_EXPORT(rt_thread_suspend);
 rt_err_t rt_thread_resume(rt_thread_t thread)
 {
     pthread_mutex_lock(&thread->mutex);
-    thread->suspended = 0;
+    thread->stat = RT_THREAD_RUNNING | (thread->stat & ~RT_THREAD_STAT_MASK);
     pthread_cond_signal(&thread->cond);
     pthread_mutex_unlock(&thread->mutex);
     return RT_EOK;

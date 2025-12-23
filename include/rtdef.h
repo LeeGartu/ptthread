@@ -690,7 +690,6 @@ struct rt_thread
     pthread_t tid;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
-    int suspended;
 
     rt_ubase_t user_data;                             /**< private user data beyond this thread */
 };

@@ -740,9 +740,19 @@ RTM_EXPORT(rt_sem_control);
  */
 rt_err_t rt_mutex_init(rt_mutex_t mutex, const char *name, rt_uint8_t flag)
 {
-    if (!mutex) return -RT_ERROR;
-    pthread_mutexattr_init(&mutex->attr);
+    /* flag parameter has been obsoleted */
+    RT_UNUSED(flag);
 
+    /* parameter check */
+    RT_ASSERT(mutex != RT_NULL);
+
+    /* initialize object */
+    rt_object_init(&(mutex->parent.parent), RT_Object_Class_Mutex, name);
+
+    /* initialize ipc object */
+    _ipc_object_init(&(mutex->parent));
+
+    pthread_mutexattr_init(&mutex->attr);
     int ret = pthread_mutex_init(&mutex->mutex, &mutex->attr);
     return (ret == 0) ? RT_EOK : -RT_ERROR;
 }
@@ -769,9 +779,20 @@ RTM_EXPORT(rt_mutex_init);
  */
 rt_err_t rt_mutex_detach(rt_mutex_t mutex)
 {
-    if (!mutex) return -RT_ERROR;
+    /* parameter check */
+    RT_ASSERT(mutex != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&mutex->parent.parent) == RT_Object_Class_Mutex);
+    RT_ASSERT(rt_object_is_systemobject(&mutex->parent.parent));
+
+    /* detach mutex object */
+    rt_object_detach(&(mutex->parent.parent));
+
     pthread_mutex_destroy(&mutex->mutex);
     pthread_mutexattr_destroy(&mutex->attr);
+
+    /* flag can only be RT_IPC_FLAG_PRIO. RT_IPC_FLAG_FIFO cannot solve the unbounded priority inversion problem */
+    mutex->parent.parent.flag = RT_IPC_FLAG_PRIO;
+
     return RT_EOK;
 }
 RTM_EXPORT(rt_mutex_detach);
@@ -847,6 +868,9 @@ rt_err_t rt_mutex_delete(rt_mutex_t mutex)
     RT_ASSERT(rt_object_is_systemobject(&mutex->parent.parent) == RT_FALSE);
 
     RT_DEBUG_NOT_IN_INTERRUPT;
+
+    /* wakeup all suspended threads */
+    _ipc_list_resume_all(&(mutex->parent.suspend_thread));
     
     pthread_mutex_destroy(&mutex->mutex);
     pthread_mutexattr_destroy(&mutex->attr);
@@ -918,10 +942,18 @@ rt_err_t rt_mutex_take(rt_mutex_t mutex, rt_int32_t timeout)
     if (timeout == RT_WAITING_FOREVER) {
         // 永久阻塞
         int ret = pthread_mutex_lock(&mutex->mutex);
+
+        /* enable interrupt */
+        rt_hw_interrupt_enable(level);
+
         return (ret == 0) ? RT_EOK : RT_ERROR;
     } else if (timeout == 0) {
         // 非阻塞
         int ret = pthread_mutex_trylock(&mutex->mutex);
+
+        /* enable interrupt */
+        rt_hw_interrupt_enable(level);
+
         if (ret == EBUSY) {
             return -RT_ETIMEOUT;
         }
@@ -931,15 +963,26 @@ rt_err_t rt_mutex_take(rt_mutex_t mutex, rt_int32_t timeout)
         while ((rt_tick_get() - time) < timeout) {
             int ret = pthread_mutex_trylock(&mutex->mutex);
             if (ret == 0) {
+
+                /* enable interrupt */
+                rt_hw_interrupt_enable(level);
+
                 return RT_EOK;  // 成功
             }
             usleep(100);
         }
 
+        /* enable interrupt */
+        rt_hw_interrupt_enable(level);
+
         return -RT_ETIMEOUT;
     }
     else {
         // timeout < 0 且不是 RT_WAITING_FOREVER（异常）
+        
+        /* enable interrupt */
+        rt_hw_interrupt_enable(level);
+
         return RT_ERROR;
     }
 

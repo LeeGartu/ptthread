@@ -85,6 +85,8 @@ void __rt_components_init(int init_start, int init_end)
 void rt_components_board_init(void)
 {
     __rt_components_init(0,1);
+    rt_system_timer_init();
+    rt_system_timer_thread_init();
 }
 
 /**

@@ -733,6 +733,37 @@ RTM_EXPORT(rt_thread_control);
  */
 rt_err_t rt_thread_suspend(rt_thread_t thread)
 {
+    rt_base_t stat;
+    rt_base_t level;
+
+    /* parameter check */
+    RT_ASSERT(thread != RT_NULL);
+    RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
+    RT_ASSERT(thread == rt_thread_self());
+
+    RT_DEBUG_LOG(RT_DEBUG_THREAD, ("thread suspend:  %s\n", thread->name));
+
+    stat = thread->stat & RT_THREAD_STAT_MASK;
+    if ((stat != RT_THREAD_READY) && (stat != RT_THREAD_RUNNING))
+    {
+        RT_DEBUG_LOG(RT_DEBUG_THREAD, ("thread suspend: thread disorder, 0x%2x\n", thread->stat));
+        return -RT_ERROR;
+    }
+
+    /* disable interrupt */
+    level = rt_hw_interrupt_disable();
+
+    /* change thread stat */
+    rt_schedule_remove_thread(thread);
+    thread->stat = RT_THREAD_SUSPEND | (thread->stat & ~RT_THREAD_STAT_MASK);
+
+    /* stop thread timer anyway */
+    rt_timer_stop(&(thread->thread_timer));
+
+    /* enable interrupt */
+    rt_hw_interrupt_enable(level);
+
+    RT_OBJECT_HOOK_CALL(rt_thread_suspend_hook, (thread));
     return RT_EOK;
 }
 RTM_EXPORT(rt_thread_suspend);
@@ -747,6 +778,37 @@ RTM_EXPORT(rt_thread_suspend);
  */
 rt_err_t rt_thread_resume(rt_thread_t thread)
 {
+    rt_base_t level;
+
+    /* parameter check */
+    RT_ASSERT(thread != RT_NULL);
+    RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
+
+    RT_DEBUG_LOG(RT_DEBUG_THREAD, ("thread resume:  %s\n", thread->name));
+
+    if ((thread->stat & RT_THREAD_STAT_MASK) != RT_THREAD_SUSPEND)
+    {
+        RT_DEBUG_LOG(RT_DEBUG_THREAD, ("thread resume: thread disorder, %d\n",
+                                       thread->stat));
+
+        return -RT_ERROR;
+    }
+
+    /* disable interrupt */
+    level = rt_hw_interrupt_disable();
+
+    /* remove from suspend list */
+    rt_list_remove(&(thread->tlist));
+
+    rt_timer_stop(&thread->thread_timer);
+
+    /* insert to schedule ready list */
+    rt_schedule_insert_thread(thread);
+
+    /* enable interrupt */
+    rt_hw_interrupt_enable(level);
+
+    RT_OBJECT_HOOK_CALL(rt_thread_resume_hook, (thread));
     return RT_EOK;
 }
 RTM_EXPORT(rt_thread_resume);

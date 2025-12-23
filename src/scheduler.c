@@ -114,22 +114,6 @@ static struct rt_thread* _scheduler_get_highest_priority_thread(rt_ubase_t *high
  */
 void rt_system_scheduler_init(void)
 {
-    rt_base_t offset;
-
-#ifndef RT_USING_SMP
-    rt_scheduler_lock_nest = 0;
-#endif /* RT_USING_SMP */
-
-    RT_DEBUG_LOG(RT_DEBUG_SCHEDULER, ("start scheduler: max priority 0x%02x\n",
-                                      RT_THREAD_PRIORITY_MAX));
-
-    for (offset = 0; offset < RT_THREAD_PRIORITY_MAX; offset ++)
-    {
-        rt_list_init(&rt_thread_priority_table[offset]);
-    }
-
-    /* initialize ready priority group */
-    rt_thread_ready_priority_group = 0;
 }
 
 /**
@@ -138,20 +122,6 @@ void rt_system_scheduler_init(void)
  */
 void rt_system_scheduler_start(void)
 {
-    struct rt_thread *to_thread;
-    rt_ubase_t highest_ready_priority;
-
-    to_thread = _scheduler_get_highest_priority_thread(&highest_ready_priority);
-
-    rt_current_thread = to_thread;
-
-    rt_schedule_remove_thread(to_thread);
-    to_thread->stat = RT_THREAD_RUNNING;
-
-    /* switch to new thread */
-    // rt_hw_context_switch_to((rt_ubase_t)&to_thread->sp);
-
-    /* never come back */
 }
 
 /**
@@ -166,102 +136,6 @@ void rt_system_scheduler_start(void)
  */
 void rt_schedule(void)
 {
-    rt_base_t level;
-    struct rt_thread *to_thread;
-    struct rt_thread *from_thread;
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    /* check the scheduler is enabled or not */
-    if (rt_scheduler_lock_nest == 0)
-    {
-        rt_ubase_t highest_ready_priority;
-
-        if (rt_thread_ready_priority_group != 0)
-        {
-            /* need_insert_from_thread: need to insert from_thread to ready queue */
-            int need_insert_from_thread = 0;
-
-            to_thread = _scheduler_get_highest_priority_thread(&highest_ready_priority);
-
-            if ((rt_current_thread->stat & RT_THREAD_STAT_MASK) == RT_THREAD_RUNNING)
-            {
-                if (rt_current_thread->current_priority < highest_ready_priority)
-                {
-                    to_thread = rt_current_thread;
-                }
-                else if (rt_current_thread->current_priority == highest_ready_priority && (rt_current_thread->stat & RT_THREAD_STAT_YIELD_MASK) == 0)
-                {
-                    to_thread = rt_current_thread;
-                }
-                else
-                {
-                    need_insert_from_thread = 1;
-                }
-                rt_current_thread->stat &= ~RT_THREAD_STAT_YIELD_MASK;
-            }
-
-            if (to_thread != rt_current_thread)
-            {
-                /* if the destination thread is not the same as current thread */
-                rt_current_priority = (rt_uint8_t)highest_ready_priority;
-                from_thread         = rt_current_thread;
-                rt_current_thread   = to_thread;
-
-                RT_OBJECT_HOOK_CALL(rt_scheduler_hook, (from_thread, to_thread));
-
-                if (need_insert_from_thread)
-                {
-                    rt_schedule_insert_thread(from_thread);
-                }
-
-                rt_schedule_remove_thread(to_thread);
-                to_thread->stat = RT_THREAD_RUNNING | (to_thread->stat & ~RT_THREAD_STAT_MASK);
-
-                /* switch to new thread */
-                RT_DEBUG_LOG(RT_DEBUG_SCHEDULER,
-                        ("[%d]switch to priority#%d "
-                         "thread:%.*s(sp:0x%08x), "
-                         "from thread:%.*s(sp: 0x%08x)\n",
-                         rt_interrupt_nest, highest_ready_priority,
-                         RT_NAME_MAX, to_thread->name, to_thread->sp,
-                         RT_NAME_MAX, from_thread->name, from_thread->sp));
-
-                if (rt_interrupt_nest == 0)
-                {
-                    extern void rt_thread_handle_sig(rt_bool_t clean_state);
-
-                    RT_OBJECT_HOOK_CALL(rt_scheduler_switch_hook, (from_thread));
-
-                    // rt_hw_context_switch((rt_ubase_t)&from_thread->sp,
-                    //         (rt_ubase_t)&to_thread->sp);
-
-                    /* enable interrupt */
-                    rt_hw_interrupt_enable(level);
-
-                    goto __exit;
-                }
-                else
-                {
-                    RT_DEBUG_LOG(RT_DEBUG_SCHEDULER, ("switch in interrupt\n"));
-
-                    // rt_hw_context_switch_interrupt((rt_ubase_t)&from_thread->sp,
-                    //         (rt_ubase_t)&to_thread->sp);
-                }
-            }
-            else
-            {
-                rt_schedule_remove_thread(rt_current_thread);
-                rt_current_thread->stat = RT_THREAD_RUNNING | (rt_current_thread->stat & ~RT_THREAD_STAT_MASK);
-            }
-        }
-    }
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
-
-__exit:
     return;
 }
 
@@ -275,44 +149,6 @@ __exit:
  */
 void rt_schedule_insert_thread(struct rt_thread *thread)
 {
-    rt_base_t level;
-
-    RT_ASSERT(thread != RT_NULL);
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    /* it's current thread, it should be RUNNING thread */
-    if (thread == rt_current_thread)
-    {
-        thread->stat = RT_THREAD_RUNNING | (thread->stat & ~RT_THREAD_STAT_MASK);
-        goto __exit;
-    }
-
-    /* READY thread, insert to ready queue */
-    thread->stat = RT_THREAD_READY | (thread->stat & ~RT_THREAD_STAT_MASK);
-    /* there is no time slices left(YIELD), inserting thread before ready list*/
-    if((thread->stat & RT_THREAD_STAT_YIELD_MASK) != 0)
-    {
-        rt_list_insert_before(&(rt_thread_priority_table[thread->current_priority]),
-                              &(thread->tlist));
-    }
-    /* there are some time slices left, inserting thread after ready list to schedule it firstly at next time*/
-    else
-    {
-        rt_list_insert_after(&(rt_thread_priority_table[thread->current_priority]),
-                              &(thread->tlist));
-    }
-
-    RT_DEBUG_LOG(RT_DEBUG_SCHEDULER, ("insert thread[%.*s], the priority: %d\n",
-                                      RT_NAME_MAX, thread->name, thread->current_priority));
-
-    /* set priority mask */
-    rt_thread_ready_priority_group |= thread->number_mask;
-
-__exit:
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
 }
 
 /**
@@ -324,26 +160,6 @@ __exit:
  */
 void rt_schedule_remove_thread(struct rt_thread *thread)
 {
-    rt_base_t level;
-
-    RT_ASSERT(thread != RT_NULL);
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    RT_DEBUG_LOG(RT_DEBUG_SCHEDULER, ("remove thread[%.*s], the priority: %d\n",
-                                      RT_NAME_MAX, thread->name,
-                                      thread->current_priority));
-
-    /* remove thread from ready list */
-    rt_list_remove(&(thread->tlist));
-    if (rt_list_isempty(&(rt_thread_priority_table[thread->current_priority])))
-    {
-        rt_thread_ready_priority_group &= ~thread->number_mask;
-    }
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
 }
 
 /**
@@ -351,19 +167,6 @@ void rt_schedule_remove_thread(struct rt_thread *thread)
  */
 void rt_enter_critical(void)
 {
-    rt_base_t level;
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    /*
-     * the maximal number of nest is RT_UINT16_MAX, which is big
-     * enough and does not check here
-     */
-    rt_scheduler_lock_nest ++;
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
 }
 RTM_EXPORT(rt_enter_critical);
 
@@ -372,29 +175,6 @@ RTM_EXPORT(rt_enter_critical);
  */
 void rt_exit_critical(void)
 {
-    rt_base_t level;
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    rt_scheduler_lock_nest --;
-    if (rt_scheduler_lock_nest <= 0)
-    {
-        rt_scheduler_lock_nest = 0;
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        if (rt_current_thread)
-        {
-            /* if scheduler is started, do a schedule */
-            rt_schedule();
-        }
-    }
-    else
-    {
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-    }
 }
 RTM_EXPORT(rt_exit_critical);
 

@@ -688,8 +688,6 @@ struct rt_thread
 
     /* pthread compatibility layer */
     pthread_t tid;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
 
     rt_ubase_t user_data;                             /**< private user data beyond this thread */
 };

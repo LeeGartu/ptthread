@@ -308,6 +308,9 @@ rt_err_t rt_sem_init(rt_sem_t    sem,
     /* initialize ipc object */
     _ipc_object_init(&(sem->parent));
 
+    pthread_mutex_init(&(sem->mutex), NULL);
+    pthread_cond_init(&(sem->cond), NULL);
+
     /* set initial value */
     sem->value = (rt_uint16_t)value;
 
@@ -346,6 +349,9 @@ rt_err_t rt_sem_detach(rt_sem_t sem)
 
     /* wakeup all suspended threads */
     _ipc_list_resume_all(&(sem->parent.suspend_thread));
+
+    pthread_mutex_destroy(&sem->mutex);
+    pthread_cond_destroy(&sem->cond);
 
     /* detach semaphore object */
     rt_object_detach(&(sem->parent.parent));
@@ -404,6 +410,9 @@ rt_sem_t rt_sem_create(const char *name, rt_uint32_t value, rt_uint8_t flag)
     /* initialize ipc object */
     _ipc_object_init(&(sem->parent));
 
+    pthread_mutex_init(&(sem->mutex), NULL);
+    pthread_cond_init(&(sem->cond), NULL);
+
     /* set initial value */
     sem->value = value;
 
@@ -444,6 +453,9 @@ rt_err_t rt_sem_delete(rt_sem_t sem)
 
     /* wakeup all suspended threads */
     _ipc_list_resume_all(&(sem->parent.suspend_thread));
+
+    pthread_mutex_destroy(&sem->mutex);
+    pthread_cond_destroy(&sem->cond);
 
     /* delete semaphore object */
     rt_object_delete(&(sem->parent.parent));
@@ -493,7 +505,7 @@ rt_err_t rt_sem_take(rt_sem_t sem, rt_int32_t timeout)
     RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&(sem->parent.parent)));
 
     /* disable interrupt */
-    level = rt_hw_interrupt_disable();
+    pthread_mutex_lock(&sem->mutex);
 
     RT_DEBUG_LOG(RT_DEBUG_IPC, ("thread %s take sem:%s, which value is: %d\n",
                                 rt_thread_self()->name,
@@ -506,60 +518,29 @@ rt_err_t rt_sem_take(rt_sem_t sem, rt_int32_t timeout)
         sem->value --;
 
         /* enable interrupt */
-        rt_hw_interrupt_enable(level);
+        pthread_mutex_unlock(&sem->mutex);
     }
     else
     {
         /* no waiting, return with timeout */
         if (timeout == 0)
         {
-            rt_hw_interrupt_enable(level);
+            pthread_mutex_unlock(&sem->mutex);
 
             return -RT_ETIMEOUT;
         }
         else
         {
-            /* current context checking */
-            RT_DEBUG_SCHEDULER_AVAILABLE(RT_TRUE);
-
-            /* semaphore is unavailable, push to suspend list */
-            /* get current thread */
-            thread = rt_thread_self();
-
-            /* reset thread error number */
-            thread->error = RT_EOK;
-
-            RT_DEBUG_LOG(RT_DEBUG_IPC, ("sem take: suspend thread - %s\n",
-                                        thread->name));
-
-            /* suspend thread */
-            _ipc_list_suspend(&(sem->parent.suspend_thread),
-                                thread,
-                                sem->parent.parent.flag);
-
-            /* has waiting time, start thread timer */
-            if (timeout > 0)
-            {
-                RT_DEBUG_LOG(RT_DEBUG_IPC, ("set thread:%s to timer list\n",
-                                            thread->name));
-
-                /* reset the timeout of thread timer and start it */
-                rt_timer_control(&(thread->thread_timer),
-                                 RT_TIMER_CTRL_SET_TIME,
-                                 &timeout);
-                rt_timer_start(&(thread->thread_timer));
+            while (sem->value <= 0) {               // 必须用 while 防止虚假唤醒
+                pthread_cond_wait(&sem->cond, &sem->mutex);
+                
             }
+            sem->value--;
 
             /* enable interrupt */
-            rt_hw_interrupt_enable(level);
+            pthread_mutex_unlock(&sem->mutex);
 
-            /* do schedule */
-            rt_schedule();
-
-            if (thread->error != RT_EOK)
-            {
-                return thread->error;
-            }
+            return RT_EOK;  // 成功
         }
     }
 

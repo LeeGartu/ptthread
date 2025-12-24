@@ -33,24 +33,6 @@ static volatile rt_tick_t rt_tick = 0;
 #if defined(RT_USING_HOOK) && defined(RT_HOOK_USING_FUNC_PTR)
 static void (*rt_tick_hook)(void);
 
-void *rt_tick_ptthread(void *param)
-{
-    rt_tick_t tick = 0;
-    while (1) {
-        tick++;
-        rt_tick_set(tick);
-        rt_thread_delay(1);
-    }
-}
-
-int rt_tick_ptthread_init(void)
-{
-    pthread_t tid;
-    pthread_create(&tid, NULL, rt_tick_ptthread, NULL);
-    return 0;
-}
-INIT_BOARD_EXPORT(rt_tick_ptthread_init);
-
 /**
  * @addtogroup Hook
  */
@@ -76,6 +58,7 @@ void rt_tick_sethook(void (*hook)(void))
 
 /**@{*/
 
+static struct timespec tm_init = {0, 0};
 /**
  * @brief    This function will return current tick from operating system startup.
  *
@@ -83,8 +66,16 @@ void rt_tick_sethook(void (*hook)(void))
  */
 rt_tick_t rt_tick_get(void)
 {
-    /* return the global tick */
-    return rt_tick;
+    struct timespec tm_now;
+    
+    clock_gettime(CLOCK_MONOTONIC, &tm_now);
+    
+    // 计算从初始时间到现在的毫秒数
+    rt_int64_t elapsed_ms = (tm_now.tv_sec - tm_init.tv_sec) * 1000LL + 
+                           (tm_now.tv_nsec - tm_init.tv_nsec) / 1000000LL;
+    
+    // 根据 RT_TICK_PER_SECOND 转换为 tick 数
+    return (rt_tick_t)(elapsed_ms * RT_TICK_PER_SECOND / 1000);
 }
 RTM_EXPORT(rt_tick_get);
 
@@ -96,8 +87,11 @@ RTM_EXPORT(rt_tick_get);
 void rt_tick_set(rt_tick_t tick)
 {
     rt_base_t level;
-
+    
     level = rt_hw_interrupt_disable();
+    if (tick == 0) {
+        clock_gettime(CLOCK_MONOTONIC, &tm_init);
+    }
     rt_tick = tick;
     rt_hw_interrupt_enable(level);
 }

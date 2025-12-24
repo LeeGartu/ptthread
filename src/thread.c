@@ -491,8 +491,18 @@ RTM_EXPORT(rt_thread_yield);
  */
 rt_err_t rt_thread_sleep(rt_tick_t tick)
 {
-    usleep(tick*1000);
-
+    struct timespec req, rem;
+    
+    // 将 tick 转换为秒和纳秒
+    req.tv_sec = tick / 1000;           // 秒部分
+    req.tv_nsec = (tick % 1000) * 1000000;  // 纳秒部分 (1ms = 1,000,000ns)
+    
+    // 使用 nanosleep 进行精确延时
+    while (nanosleep(&req, &rem) == -1) {
+        // 如果被信号中断，继续睡眠剩余时间
+        req = rem;
+    }
+    
     return RT_EOK;
 }
 

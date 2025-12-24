@@ -53,6 +53,7 @@
 #ifdef RT_USING_LIBC
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -733,6 +734,8 @@ struct rt_semaphore
 
     rt_uint16_t          value;                         /**< value of semaphore. */
     rt_uint16_t          reserved;                      /**< reserved field */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 };
 typedef struct rt_semaphore *rt_sem_t;
 #endif /* RT_USING_SEMAPHORE */

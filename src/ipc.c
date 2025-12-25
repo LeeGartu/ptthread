@@ -63,6 +63,33 @@ extern void (*rt_object_take_hook)(struct rt_object *object);
 extern void (*rt_object_put_hook)(struct rt_object *object);
 #endif /* RT_USING_HOOK */
 
+int get_abs_timeout(rt_int32_t timeout_ms, struct timespec *ts)
+{
+    if (timeout_ms <= 0) {
+        return -1; // 超时必须 > 0
+    }
+    if (clock_gettime(CLOCK_REALTIME, ts) != 0) {
+        return -1;
+    }
+
+    // 分解 timeout
+    time_t timeout_sec = timeout_ms / 1000;
+    long timeout_nsec = (timeout_ms % 1000) * 1000000;
+
+    // 加秒
+    ts->tv_sec += timeout_sec;
+
+    // 加纳秒（带进位）
+    if (ts->tv_nsec + timeout_nsec >= 1000000000L) {
+        ts->tv_sec++;
+        ts->tv_nsec = ts->tv_nsec + timeout_nsec - 1000000000L;
+    } else {
+        ts->tv_nsec += timeout_nsec;
+    }
+
+    return 0;
+}
+
 /**
  * @addtogroup IPC
  */
@@ -531,10 +558,24 @@ rt_err_t rt_sem_take(rt_sem_t sem, rt_int32_t timeout)
         }
         else
         {
-            while (sem->value <= 0) {               // 必须用 while 防止虚假唤醒
-                pthread_cond_wait(&sem->cond, &sem->mutex);
-                
+            if (timeout == RT_WAITING_FOREVER) {
+                while (sem->value <= 0) {
+                    pthread_cond_wait(&sem->cond, &sem->mutex);
+                }
+
+            } else {
+                struct timespec ts;
+                get_abs_timeout(timeout, &ts);
+
+                while (sem->value <= 0) {
+                    int ret = pthread_cond_timedwait(&sem->cond, &sem->mutex, &ts);
+                    if (ret == ETIMEDOUT) {
+                        pthread_mutex_unlock(&sem->mutex);
+                        return -RT_ETIMEOUT;
+                    }
+                }
             }
+
             sem->value--;
 
             /* enable interrupt */
@@ -595,41 +636,19 @@ rt_err_t rt_sem_release(rt_sem_t sem)
 
     RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(sem->parent.parent)));
 
-    need_schedule = RT_FALSE;
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    RT_DEBUG_LOG(RT_DEBUG_IPC, ("thread %s releases sem:%s, which value is: %d\n",
-                                rt_thread_self()->name,
-                                ((struct rt_object *)sem)->name,
-                                sem->value));
-
-    if (!rt_list_isempty(&sem->parent.suspend_thread))
-    {
-        /* resume the suspended thread */
-        _ipc_list_resume(&(sem->parent.suspend_thread));
-        need_schedule = RT_TRUE;
-    }
-    else
-    {
-        if(sem->value < RT_SEM_VALUE_MAX)
-        {
-            sem->value ++; /* increase value */
-        }
-        else
-        {
-            rt_hw_interrupt_enable(level); /* enable interrupt */
-            return -RT_EFULL; /* value overflowed */
-        }
+    // 1. 获取锁（保护 count 和 cond）
+    if (pthread_mutex_lock(&sem->mutex) != 0) {
+        return RT_ERROR;
     }
 
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
+    // 2. 计数器 +1
+    sem->value++;
 
-    /* resume a thread, re-schedule */
-    if (need_schedule == RT_TRUE)
-        rt_schedule();
+    // 3. 唤醒一个等待者（如果有）
+    pthread_cond_signal(&sem->cond);
+
+    // 4. 释放锁
+    pthread_mutex_unlock(&sem->mutex);
 
     return RT_EOK;
 }
@@ -665,16 +684,18 @@ rt_err_t rt_sem_control(rt_sem_t sem, int cmd, void *arg)
         /* get value */
         value = (rt_ubase_t)(uintptr_t)arg;
         /* disable interrupt */
-        level = rt_hw_interrupt_disable();
+        if (pthread_mutex_lock(&sem->mutex) != 0) {
+            return RT_ERROR;
+        }
 
         /* resume all waiting thread */
-        _ipc_list_resume_all(&sem->parent.suspend_thread);
+        pthread_cond_broadcast(&sem->cond);
 
         /* set new value */
         sem->value = (rt_uint16_t)value;
 
         /* enable interrupt */
-        rt_hw_interrupt_enable(level);
+        pthread_mutex_unlock(&sem->mutex);
 
         rt_schedule();
 
@@ -734,6 +755,7 @@ rt_err_t rt_mutex_init(rt_mutex_t mutex, const char *name, rt_uint8_t flag)
     _ipc_object_init(&(mutex->parent));
 
     pthread_mutexattr_init(&mutex->attr);
+    pthread_mutexattr_settype(&mutex->attr, PTHREAD_MUTEX_RECURSIVE);
     int ret = pthread_mutex_init(&mutex->mutex, &mutex->attr);
     return (ret == 0) ? RT_EOK : -RT_ERROR;
 }
@@ -813,6 +835,7 @@ rt_mutex_t rt_mutex_create(const char *name, rt_uint8_t flag)
 
     /* initialize ipc object */
     pthread_mutexattr_init(&mutex->attr);
+    pthread_mutexattr_settype(&mutex->attr, PTHREAD_MUTEX_RECURSIVE);
     pthread_mutex_init(&mutex->mutex, &mutex->attr);
 
     /* flag can only be RT_IPC_FLAG_PRIO. RT_IPC_FLAG_FIFO cannot solve the unbounded priority inversion problem */
@@ -904,9 +927,6 @@ rt_err_t rt_mutex_take(rt_mutex_t mutex, rt_int32_t timeout)
     /* get current thread */
     thread = rt_thread_self();
 
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
     RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&(mutex->parent.parent)));
 
     RT_DEBUG_LOG(RT_DEBUG_IPC,
@@ -924,51 +944,26 @@ rt_err_t rt_mutex_take(rt_mutex_t mutex, rt_int32_t timeout)
         // 永久阻塞
         int ret = pthread_mutex_lock(&mutex->mutex);
 
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
         return (ret == 0) ? RT_EOK : RT_ERROR;
     } else if (timeout == 0) {
         // 非阻塞
         int ret = pthread_mutex_trylock(&mutex->mutex);
 
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
         if (ret == EBUSY) {
             return -RT_ETIMEOUT;
         }
         return (ret == 0) ? RT_EOK : RT_ERROR;
+
     } else if (timeout > 0) {
-        rt_int32_t time = rt_tick_get();
-        while ((rt_tick_get() - time) < timeout) {
-            int ret = pthread_mutex_trylock(&mutex->mutex);
-            if (ret == 0) {
+        struct timespec ts;
+        get_abs_timeout(timeout, &ts);
 
-                /* enable interrupt */
-                rt_hw_interrupt_enable(level);
-
-                return RT_EOK;  // 成功
-            }
-            usleep(100);
+        int ret = pthread_mutex_timedlock(&mutex->mutex, &ts);
+        if (ret == ETIMEDOUT) {
+            return -RT_ETIMEOUT;
         }
-
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        return -RT_ETIMEOUT;
+        return (ret == 0) ? RT_EOK : RT_ERROR;
     }
-    else {
-        // timeout < 0 且不是 RT_WAITING_FOREVER（异常）
-        
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        return RT_ERROR;
-    }
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
 
     RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(mutex->parent.parent)));
 

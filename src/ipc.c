@@ -1106,6 +1106,9 @@ rt_err_t rt_event_init(rt_event_t event, const char *name, rt_uint8_t flag)
     /* initialize ipc object */
     _ipc_object_init(&(event->parent));
 
+    pthread_mutex_init(&event->mutex, NULL);
+    pthread_cond_init(&event->cond, NULL);
+
     /* initialize event */
     event->set = 0;
 
@@ -1141,6 +1144,9 @@ rt_err_t rt_event_detach(rt_event_t event)
 
     /* resume all suspended thread */
     _ipc_list_resume_all(&(event->parent.suspend_thread));
+
+    pthread_mutex_destroy(&event->mutex);
+    pthread_cond_destroy(&event->cond);
 
     /* detach event object */
     rt_object_detach(&(event->parent.parent));
@@ -1197,6 +1203,9 @@ rt_event_t rt_event_create(const char *name, rt_uint8_t flag)
     /* initialize ipc object */
     _ipc_object_init(&(event->parent));
 
+    pthread_mutex_init(&event->mutex, NULL);
+    pthread_cond_init(&event->cond, NULL);
+
     /* initialize event */
     event->set = 0;
 
@@ -1234,6 +1243,9 @@ rt_err_t rt_event_delete(rt_event_t event)
 
     /* resume all suspended thread */
     _ipc_list_resume_all(&(event->parent.suspend_thread));
+
+    pthread_mutex_destroy(&event->mutex);
+    pthread_cond_destroy(&event->cond);
 
     /* delete event object */
     rt_object_delete(&(event->parent.parent));
@@ -1279,75 +1291,15 @@ rt_err_t rt_event_send(rt_event_t event, rt_uint32_t set)
     need_schedule = RT_FALSE;
 
     /* disable interrupt */
-    level = rt_hw_interrupt_disable();
+    pthread_mutex_lock(&event->mutex);
 
     /* set event */
     event->set |= set;
 
-    RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(event->parent.parent)));
-
-    if (!rt_list_isempty(&event->parent.suspend_thread))
-    {
-        /* search thread list to resume thread */
-        n = event->parent.suspend_thread.next;
-        while (n != &(event->parent.suspend_thread))
-        {
-            /* get thread */
-            thread = rt_list_entry(n, struct rt_thread, tlist);
-
-            status = -RT_ERROR;
-            if (thread->event_info & RT_EVENT_FLAG_AND)
-            {
-                if ((thread->event_set & event->set) == thread->event_set)
-                {
-                    /* received an AND event */
-                    status = RT_EOK;
-                }
-            }
-            else if (thread->event_info & RT_EVENT_FLAG_OR)
-            {
-                if (thread->event_set & event->set)
-                {
-                    /* save the received event set */
-                    thread->event_set = thread->event_set & event->set;
-
-                    /* received an OR event */
-                    status = RT_EOK;
-                }
-            }
-            else
-            {
-                /* enable interrupt */
-                rt_hw_interrupt_enable(level);
-
-                return -RT_EINVAL;
-            }
-
-            /* move node to the next */
-            n = n->next;
-
-            /* condition is satisfied, resume thread */
-            if (status == RT_EOK)
-            {
-                /* clear event */
-                if (thread->event_info & RT_EVENT_FLAG_CLEAR)
-                    event->set &= ~thread->event_set;
-
-                /* resume thread, and thread list breaks out */
-                rt_thread_resume(thread);
-
-                /* need do a scheduling */
-                need_schedule = RT_TRUE;
-            }
-        }
-    }
+    pthread_cond_broadcast(&event->cond);
 
     /* enable interrupt */
-    rt_hw_interrupt_enable(level);
-
-    /* do a schedule */
-    if (need_schedule == RT_TRUE)
-        rt_schedule();
+    pthread_mutex_unlock(&event->mutex);
 
     return RT_EOK;
 }
@@ -1392,6 +1344,18 @@ rt_err_t rt_event_recv(rt_event_t   event,
                        rt_int32_t   timeout,
                        rt_uint32_t *recved)
 {
+#define check_condition() do{\
+    if (option & RT_EVENT_FLAG_AND) {       \
+        if ((event->set & set) == set)      \
+            status = RT_EOK;                \
+    } else if (option & RT_EVENT_FLAG_OR) { \
+        if (event->set & set)               \
+            status = RT_EOK;                \
+    } else {                                \
+        RT_ASSERT(0);                       \
+    }                                       \
+} while (0)
+
     struct rt_thread *thread;
     rt_base_t level;
     rt_base_t status;
@@ -1416,24 +1380,9 @@ rt_err_t rt_event_recv(rt_event_t   event,
     RT_OBJECT_HOOK_CALL(rt_object_trytake_hook, (&(event->parent.parent)));
 
     /* disable interrupt */
-    level = rt_hw_interrupt_disable();
+    pthread_mutex_lock(&event->mutex);
 
-    /* check event set */
-    if (option & RT_EVENT_FLAG_AND)
-    {
-        if ((event->set & set) == set)
-            status = RT_EOK;
-    }
-    else if (option & RT_EVENT_FLAG_OR)
-    {
-        if (event->set & set)
-            status = RT_EOK;
-    }
-    else
-    {
-        /* either RT_EVENT_FLAG_AND or RT_EVENT_FLAG_OR should be set */
-        RT_ASSERT(0);
-    }
+    check_condition();
 
     if (status == RT_EOK)
     {
@@ -1441,67 +1390,50 @@ rt_err_t rt_event_recv(rt_event_t   event,
         if (recved)
             *recved = (event->set & set);
 
-        /* fill thread event info */
-        thread->event_set = (event->set & set);
-        thread->event_info = option;
-
         /* received event */
         if (option & RT_EVENT_FLAG_CLEAR)
             event->set &= ~set;
     }
     else if (timeout == 0)
     {
-        /* no waiting */
-        thread->error = -RT_ETIMEOUT;
-
         /* enable interrupt */
-        rt_hw_interrupt_enable(level);
+        pthread_mutex_unlock(&event->mutex);
 
         return -RT_ETIMEOUT;
     }
     else
     {
-        /* fill thread event info */
-        thread->event_set  = set;
-        thread->event_info = option;
+        if (timeout == RT_WAITING_FOREVER) {
+            while(status != RT_EOK) {
+                pthread_cond_wait(&event->cond, &event->mutex);
+                check_condition();
+            }
+        
+        } else {
+            struct timespec ts;
+            get_abs_timeout(timeout, &ts);
+            while(status != RT_EOK) {
+                if (pthread_cond_timedwait(&event->cond, &event->mutex, &ts) == ETIMEDOUT) {
+                    /* enable interrupt */
+                    pthread_mutex_unlock(&event->mutex);
 
-        /* put thread to suspended thread list */
-        _ipc_list_suspend(&(event->parent.suspend_thread),
-                            thread,
-                            event->parent.parent.flag);
-
-        /* if there is a waiting timeout, active thread timer */
-        if (timeout > 0)
-        {
-            /* reset the timeout of thread timer and start it */
-            rt_timer_control(&(thread->thread_timer),
-                             RT_TIMER_CTRL_SET_TIME,
-                             &timeout);
-            rt_timer_start(&(thread->thread_timer));
+                    return -RT_ETIMEOUT;
+                }
+                check_condition();
+            }
         }
-
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        /* do a schedule */
-        rt_schedule();
-
-        if (thread->error != RT_EOK)
-        {
-            /* return error */
-            return thread->error;
-        }
-
-        /* received an event, disable interrupt to protect */
-        level = rt_hw_interrupt_disable();
 
         /* set received event */
         if (recved)
-            *recved = thread->event_set;
+            *recved = (event->set & set);
+
+        /* received event */
+        if (option & RT_EVENT_FLAG_CLEAR)
+            event->set &= ~set;
     }
 
     /* enable interrupt */
-    rt_hw_interrupt_enable(level);
+    pthread_mutex_unlock(&event->mutex);
 
     RT_OBJECT_HOOK_CALL(rt_object_take_hook, (&(event->parent.parent)));
 
@@ -1535,18 +1467,13 @@ rt_err_t rt_event_control(rt_event_t event, int cmd, void *arg)
     if (cmd == RT_IPC_CMD_RESET)
     {
         /* disable interrupt */
-        level = rt_hw_interrupt_disable();
-
-        /* resume all waiting thread */
-        _ipc_list_resume_all(&event->parent.suspend_thread);
+        pthread_mutex_lock(&event->mutex);
 
         /* initialize event set */
         event->set = 0;
 
         /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        rt_schedule();
+        pthread_mutex_unlock(&event->mutex);
 
         return RT_EOK;
     }
@@ -1626,6 +1553,10 @@ rt_err_t rt_mb_init(rt_mailbox_t mb,
     mb->in_offset  = 0;
     mb->out_offset = 0;
 
+    pthread_mutex_init(&mb->mutex, NULL);
+    pthread_cond_init(&mb->cond_empty, NULL);
+    pthread_cond_init(&mb->cond_full, NULL);
+
     /* initialize an additional list of sender suspend thread */
     rt_list_init(&(mb->suspend_sender_thread));
 
@@ -1663,6 +1594,10 @@ rt_err_t rt_mb_detach(rt_mailbox_t mb)
     _ipc_list_resume_all(&(mb->parent.suspend_thread));
     /* also resume all mailbox private suspended thread */
     _ipc_list_resume_all(&(mb->suspend_sender_thread));
+
+    pthread_mutex_destroy(&mb->mutex);
+    pthread_cond_destroy(&mb->cond_empty);
+    pthread_cond_destroy(&mb->cond_full);
 
     /* detach mailbox object */
     rt_object_detach(&(mb->parent.parent));
@@ -1736,6 +1671,10 @@ rt_mailbox_t rt_mb_create(const char *name, rt_size_t size, rt_uint8_t flag)
     mb->in_offset  = 0;
     mb->out_offset = 0;
 
+    pthread_mutex_init(&mb->mutex, NULL);
+    pthread_cond_init(&mb->cond_empty, NULL);
+    pthread_cond_init(&mb->cond_full, NULL);
+
     /* initialize an additional list of sender suspend thread */
     rt_list_init(&(mb->suspend_sender_thread));
 
@@ -1776,6 +1715,10 @@ rt_err_t rt_mb_delete(rt_mailbox_t mb)
 
     /* also resume all mailbox private suspended thread */
     _ipc_list_resume_all(&(mb->suspend_sender_thread));
+
+    pthread_mutex_destroy(&mb->mutex);
+    pthread_cond_destroy(&mb->cond_empty);
+    pthread_cond_destroy(&mb->cond_full);
 
     /* free mailbox pool */
     RT_KERNEL_FREE(mb->msg_pool);
@@ -1835,17 +1778,17 @@ rt_err_t rt_mb_send_wait(rt_mailbox_t mb,
     RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(mb->parent.parent)));
 
     /* disable interrupt */
-    level = rt_hw_interrupt_disable();
+    pthread_mutex_lock(mb->mutex);
 
     /* for non-blocking call */
     if (mb->entry == mb->size && timeout == 0)
     {
-        rt_hw_interrupt_enable(level);
+        pthread_mutex_unlock(mb->mutex);
         return -RT_EFULL;
     }
 
     /* mailbox is full */
-    while (mb->entry == mb->size)
+    if (mb->entry == mb->size)
     {
         /* reset error number in thread */
         thread->error = RT_EOK;
@@ -1854,55 +1797,26 @@ rt_err_t rt_mb_send_wait(rt_mailbox_t mb,
         if (timeout == 0)
         {
             /* enable interrupt */
-            rt_hw_interrupt_enable(level);
+            pthread_mutex_unlock(mb->mutex);
 
             return -RT_EFULL;
         }
 
-        /* suspend current thread */
-        _ipc_list_suspend(&(mb->suspend_sender_thread),
-                            thread,
-                            mb->parent.parent.flag);
-
         /* has waiting time, start thread timer */
-        if (timeout > 0)
-        {
-            /* get the start tick of timer */
-            tick_delta = rt_tick_get();
-
-            RT_DEBUG_LOG(RT_DEBUG_IPC, ("mb_send_wait: start timer of thread:%s\n",
-                                        thread->name));
-
-            /* reset the timeout of thread timer and start it */
-            rt_timer_control(&(thread->thread_timer),
-                             RT_TIMER_CTRL_SET_TIME,
-                             &timeout);
-            rt_timer_start(&(thread->thread_timer));
-        }
-
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        /* re-schedule */
-        rt_schedule();
-
-        /* resume from suspend state */
-        if (thread->error != RT_EOK)
-        {
-            /* return error */
-            return thread->error;
-        }
-
-        /* disable interrupt */
-        level = rt_hw_interrupt_disable();
-
-        /* if it's not waiting forever and then re-calculate timeout tick */
-        if (timeout > 0)
-        {
-            tick_delta = rt_tick_get() - tick_delta;
-            timeout -= tick_delta;
-            if (timeout < 0)
-                timeout = 0;
+        if (timeout == RT_WAITING_FOREVER) {
+            while (mb->entry == mb->size) {
+                pthread_cond_wait(&mb->cond_full, &mb->mutex);
+            }
+        
+        } else if (timeout > 0) {
+            struct timespec ts;
+            get_abs_timeout(timeout, &ts);
+            while (mb->entry == mb->size) {
+                if (pthread_cond_timedwait(&mb->cond_full, &mb->mutex, &ts) == ETIMEDOUT) {
+                    pthread_mutex_unlock(&mb->mutex);
+                    return -RT_ETIMEOUT;
+                }
+            }
         }
     }
 
@@ -1920,25 +1834,12 @@ rt_err_t rt_mb_send_wait(rt_mailbox_t mb,
     }
     else
     {
-        rt_hw_interrupt_enable(level); /* enable interrupt */
+        pthread_mutex_unlock(mb->mutex);
         return -RT_EFULL; /* value overflowed */
     }
 
-    /* resume suspended thread */
-    if (!rt_list_isempty(&mb->parent.suspend_thread))
-    {
-        _ipc_list_resume(&(mb->parent.suspend_thread));
-
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        rt_schedule();
-
-        return RT_EOK;
-    }
-
     /* enable interrupt */
-    rt_hw_interrupt_enable(level);
+    pthread_mutex_unlock(mb->mutex);
 
     return RT_EOK;
 }
@@ -1996,11 +1897,11 @@ rt_err_t rt_mb_urgent(rt_mailbox_t mb, rt_ubase_t value)
     RT_OBJECT_HOOK_CALL(rt_object_put_hook, (&(mb->parent.parent)));
 
     /* disable interrupt */
-    level = rt_hw_interrupt_disable();
+    pthread_mutex_lock(&mb->mutex);
 
     if (mb->entry == mb->size)
     {
-        rt_hw_interrupt_enable(level);
+        pthread_mutex_unlock(&mb->mutex);
         return -RT_EFULL;
     }
 
@@ -2020,21 +1921,8 @@ rt_err_t rt_mb_urgent(rt_mailbox_t mb, rt_ubase_t value)
     /* increase message entry */
     mb->entry ++;
 
-    /* resume suspended thread */
-    if (!rt_list_isempty(&mb->parent.suspend_thread))
-    {
-        _ipc_list_resume(&(mb->parent.suspend_thread));
-
-        /* enable interrupt */
-        rt_hw_interrupt_enable(level);
-
-        rt_schedule();
-
-        return RT_EOK;
-    }
-
     /* enable interrupt */
-    rt_hw_interrupt_enable(level);
+    pthread_mutex_unlock(&mb->mutex);
 
     return RT_EOK;
 }

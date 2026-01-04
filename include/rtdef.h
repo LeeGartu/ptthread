@@ -51,7 +51,9 @@
 
 #include <rtconfig.h>
 #ifdef RT_USING_LIBC
+#include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -124,8 +126,8 @@ typedef unsigned int                    rt_size_t;      /**< Type for size numbe
 #endif /* RT_USING_ARCH_DATA_TYPE */
 
 typedef int                             rt_bool_t;      /**< boolean type */
-typedef long                            rt_base_t;      /**< Nbit CPU related date type */
-typedef unsigned long                   rt_ubase_t;     /**< Nbit unsigned CPU related data type */
+typedef rt_int32_t                      rt_base_t;      /**< Nbit CPU related date type */
+typedef rt_uint32_t                     rt_ubase_t;     /**< Nbit unsigned CPU related data type */
 
 typedef rt_base_t                       rt_err_t;       /**< Type for error number */
 typedef rt_uint32_t                     rt_time_t;      /**< Type for time stamp */
@@ -275,13 +277,20 @@ typedef int (*init_fn_t)(void);
             const char* fn_name;
             const init_fn_t fn;
         };
+        void register_components(const struct rt_init_desc *desc, char *level);
         #define INIT_EXPORT(fn, level)                                                       \
-            const char __rti_##fn##_name[] = #fn;                                            \
-            RT_USED const struct rt_init_desc __rt_init_desc_##fn RT_SECTION(".rti_fn." level) = \
-            { __rti_##fn##_name, fn};
+            static const char __rti_##fn##_name[] = #fn;                                     \
+            static const struct rt_init_desc __rti_init_desc_##fn = { __rti_##fn##_name, fn};\
+            __attribute__((constructor, used)) static void __rt_init_desc##fn(void) {        \
+                register_components(&__rti_init_desc_##fn, level);                           \
+            }
     #else
+        void register_components(const init_fn_t *desc, char *level);
         #define INIT_EXPORT(fn, level)                                                       \
-            RT_USED const init_fn_t __rt_init_##fn RT_SECTION(".rti_fn." level) = fn
+            static const init_fn_t __rti_init_##fn = fn;                                     \
+            __attribute__((constructor, used)) static void __rt_init_##fn(void) {            \
+                register_components(&__rti_init_##fn, level);                                \
+            }
     #endif
 #endif
 #else
@@ -650,7 +659,8 @@ struct rt_thread
 
     /* stack point and entry */
     void       *sp;                                     /**< stack point */
-    void       *entry;                                  /**< entry */
+    // void       *entry;                                  /**< entry */
+    void (*entry)(void *parameter);
     void       *parameter;                              /**< parameter */
     void       *stack_addr;                             /**< stack address */
     rt_uint32_t stack_size;                             /**< stack size */
@@ -679,9 +689,6 @@ struct rt_thread
 
     /* pthread compatibility layer */
     pthread_t tid;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    int suspended;
 
     rt_ubase_t user_data;                             /**< private user data beyond this thread */
 };
@@ -727,6 +734,8 @@ struct rt_semaphore
 
     rt_uint16_t          value;                         /**< value of semaphore. */
     rt_uint16_t          reserved;                      /**< reserved field */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 };
 typedef struct rt_semaphore *rt_sem_t;
 #endif /* RT_USING_SEMAPHORE */
@@ -738,13 +747,9 @@ typedef struct rt_semaphore *rt_sem_t;
 struct rt_mutex
 {
     struct rt_ipc_object parent;                        /**< inherit from ipc_object */
-
-    rt_uint16_t          value;                         /**< value of mutex */
-
-    rt_uint8_t           original_priority;             /**< priority of last thread hold the mutex */
-    rt_uint8_t           hold;                          /**< numbers of thread hold the mutex */
-
-    struct rt_thread    *owner;                         /**< current owner of mutex */
+    
+    pthread_mutex_t mutex;
+    pthread_mutexattr_t attr;
 };
 typedef struct rt_mutex *rt_mutex_t;
 #endif /* RT_USING_MUTEX */
@@ -765,6 +770,8 @@ struct rt_event
     struct rt_ipc_object parent;                        /**< inherit from ipc_object */
 
     rt_uint32_t          set;                           /**< event set */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 };
 typedef struct rt_event *rt_event_t;
 #endif /* RT_USING_EVENT */
@@ -786,6 +793,10 @@ struct rt_mailbox
     rt_uint16_t          out_offset;                    /**< output offset of the message buffer */
 
     rt_list_t            suspend_sender_thread;         /**< sender thread suspended on this mailbox */
+
+    pthread_mutex_t mutex;
+    pthread_cond_t cond_empty;
+    pthread_cond_t cond_full;
 };
 typedef struct rt_mailbox *rt_mailbox_t;
 #endif /* RT_USING_MAILBOX */

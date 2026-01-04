@@ -126,7 +126,7 @@ static void _timer_init(rt_timer_t timer,
     int i;
 
     /* set flag */
-    timer->parent.flag  = flag;
+    timer->parent.flag  = flag|RT_TIMER_FLAG_SOFT_TIMER;
 
     /* set deactivated */
     timer->parent.flag &= ~RT_TIMER_FLAG_ACTIVATED;

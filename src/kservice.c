@@ -405,17 +405,6 @@ void show_board_version(void)
     rt_kprintf("RT-Thread Kernel Version %s\n", RT_VERSION);
 }
 
-/**
- * This function will show the version of rt-thread rtos
- */
-void rt_show_banner(void)
-{
-    rt_kprintf("%s", BANNER1);
-    rt_kprintf("%s", BANNER2);
-    rt_kprintf("%s", BANNER3);
-}
-RTM_EXPORT(rt_show_banner);
-
 extern struct boot_args boot_arg;
 void rt_show_version(void)
 {
@@ -839,14 +828,7 @@ void rt_kputs(const char *str)
     if (!str) return;
 
 #ifdef RT_USING_DEVICE
-    if (_console_device == RT_NULL)
-    {
-        rt_hw_console_output(str);
-    }
-    else
-    {
-        rt_device_write(_console_device, 0, str, rt_strlen(str));
-    }
+    printf("%s", str);
 #else
     rt_hw_console_output(str);
 #endif /* RT_USING_DEVICE */
@@ -859,7 +841,7 @@ void rt_kputs(const char *str)
  *
  * @return The number of characters actually written to buffer.
  */
-RT_WEAK int rt_kprintf(const char *fmt, ...)
+int rt_kprintf(const char *fmt, ...)
 {
     va_list args;
     rt_size_t length;
@@ -874,18 +856,7 @@ RT_WEAK int rt_kprintf(const char *fmt, ...)
     length = rt_vsnprintf(rt_log_buf, sizeof(rt_log_buf) - 1, fmt, args);
     if (length > RT_CONSOLEBUF_SIZE - 1)
         length = RT_CONSOLEBUF_SIZE - 1;
-#ifdef RT_USING_DEVICE
-    if (_console_device == RT_NULL)
-    {
-        rt_hw_console_output(rt_log_buf);
-    }
-    else
-    {
-        rt_device_write(_console_device, 0, rt_log_buf, length);
-    }
-#else
-    rt_hw_console_output(rt_log_buf);
-#endif /* RT_USING_DEVICE */
+    printf("%s", rt_log_buf);
     va_end(args);
 
     return length;

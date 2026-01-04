@@ -52,19 +52,7 @@ static void (*rt_thread_suspend_hook)(rt_thread_t thread);
 static void (*rt_thread_resume_hook) (rt_thread_t thread);
 static void (*rt_thread_inited_hook) (rt_thread_t thread);
 
-// 主线程：控制暂停/恢复
-void pause_thread(thread_control_t *ctrl) {
-    pthread_mutex_lock(&ctrl->mutex);
-    ctrl->paused = true;
-    pthread_mutex_unlock(&ctrl->mutex);
-}
-
-void resume_thread(thread_control_t *ctrl) {
-    pthread_mutex_lock(&ctrl->mutex);
-    ctrl->paused = false;
-    pthread_cond_broadcast(&ctrl->cond); // 唤醒等待的线程
-    pthread_mutex_unlock(&ctrl->mutex);
-}
+static __thread rt_thread_t rt_current_thread = NULL;
 
 /**
  * @brief   This function sets a hook function when the system suspend a thread.
@@ -177,6 +165,49 @@ static rt_err_t _thread_init(struct rt_thread *thread,
                              rt_uint8_t        priority,
                              rt_uint32_t       tick)
 {
+    /* init thread list */
+    rt_list_init(&(thread->tlist));
+
+    thread->entry = (void *)entry;
+    thread->parameter = parameter;
+
+    /* stack init */
+    thread->stack_addr = stack_start;
+    thread->stack_size = stack_size;
+
+    /* priority init */
+    RT_ASSERT(priority < RT_THREAD_PRIORITY_MAX);
+    thread->current_priority = priority;
+
+    thread->number_mask = 0;
+
+#ifdef RT_USING_EVENT
+    thread->event_set = 0;
+    thread->event_info = 0;
+#endif /* RT_USING_EVENT */
+
+    /* tick init */
+    thread->init_tick      = tick;
+    thread->remaining_tick = tick;
+
+    /* error and flags */
+    thread->error = RT_EOK;
+    thread->stat  = RT_THREAD_INIT;
+
+    /* initialize cleanup function and user data */
+    thread->cleanup   = 0;
+    thread->user_data = 0;
+
+    /* initialize thread timer */
+    rt_timer_init(&(thread->thread_timer),
+                  thread->name,
+                  _thread_timeout,
+                  thread,
+                  0,
+                  RT_TIMER_FLAG_ONE_SHOT);
+
+    RT_OBJECT_HOOK_CALL(rt_thread_inited_hook, (thread));
+
     return RT_EOK;
 }
 
@@ -252,12 +283,18 @@ rt_thread_t rt_thread_self(void)
     rt_hw_local_irq_enable(lock);
     return self;
 #else
-    extern rt_thread_t rt_current_thread;
 
     return rt_current_thread;
 #endif /* RT_USING_SMP */
 }
 RTM_EXPORT(rt_thread_self);
+
+static void *thread_wrapper(void *arg) {
+    rt_current_thread = (rt_thread_t)arg;  // 绑定当前线程上下文
+    rt_current_thread->entry(rt_current_thread->parameter);
+
+    return NULL;
+}
 
 /**
  * @brief   This function will start a thread and put it to system ready queue.
@@ -273,9 +310,8 @@ rt_err_t rt_thread_startup(rt_thread_t thread)
     RT_ASSERT(thread != RT_NULL);
     RT_ASSERT((thread->stat & RT_THREAD_STAT_MASK) == RT_THREAD_INIT);
     RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
-
     /* calculate priority attribute */
-    
+    pthread_create(&thread->tid, NULL, thread_wrapper, thread);
 
     return RT_EOK;
 }
@@ -359,12 +395,15 @@ rt_thread_t rt_thread_create(const char *name,
 
     thread = (struct rt_thread *)rt_object_allocate(RT_Object_Class_Thread,
                                                     name);
-    
-    thread->entry = entry;
-    thread->parameter = parameter;
-    thread->suspended = 0;
-    pthread_mutex_init(&thread->mutex, NULL);
-    pthread_cond_init(&thread->cond, NULL);
+
+    _thread_init(thread,
+                 name,
+                 entry,
+                 parameter,
+                 stack_start,
+                 stack_size,
+                 priority,
+                 tick);
 
     return thread;
 }
@@ -452,37 +491,19 @@ RTM_EXPORT(rt_thread_yield);
  */
 rt_err_t rt_thread_sleep(rt_tick_t tick)
 {
-    rt_base_t level;
-    struct rt_thread *thread;
-
-    /* set to current thread */
-    thread = rt_thread_self();
-    RT_ASSERT(thread != RT_NULL);
-    RT_ASSERT(rt_object_get_type((rt_object_t)thread) == RT_Object_Class_Thread);
-
-    /* disable interrupt */
-    level = rt_hw_interrupt_disable();
-
-    /* reset thread error */
-    thread->error = RT_EOK;
-
-    /* suspend thread */
-    rt_thread_suspend(thread);
-
-    /* reset the timeout of thread timer and start it */
-    rt_timer_control(&(thread->thread_timer), RT_TIMER_CTRL_SET_TIME, &tick);
-    rt_timer_start(&(thread->thread_timer));
-
-    /* enable interrupt */
-    rt_hw_interrupt_enable(level);
-
-    rt_schedule();
-
-    /* clear error number of this thread to RT_EOK */
-    if (thread->error == -RT_ETIMEOUT)
-        thread->error = RT_EOK;
-
-    return thread->error;
+    struct timespec req, rem;
+    
+    // 将 tick 转换为秒和纳秒
+    req.tv_sec = tick / 1000;           // 秒部分
+    req.tv_nsec = (tick % 1000) * 1000000;  // 纳秒部分 (1ms = 1,000,000ns)
+    
+    // 使用 nanosleep 进行精确延时
+    while (nanosleep(&req, &rem) == -1) {
+        // 如果被信号中断，继续睡眠剩余时间
+        req = rem;
+    }
+    
+    return RT_EOK;
 }
 
 /**
@@ -722,9 +743,6 @@ RTM_EXPORT(rt_thread_control);
  */
 rt_err_t rt_thread_suspend(rt_thread_t thread)
 {
-    pthread_mutex_lock(&thread->mutex);
-    thread->suspended = 1;
-    pthread_mutex_unlock(&thread->mutex);
     return RT_EOK;
 }
 RTM_EXPORT(rt_thread_suspend);
@@ -739,10 +757,6 @@ RTM_EXPORT(rt_thread_suspend);
  */
 rt_err_t rt_thread_resume(rt_thread_t thread)
 {
-    pthread_mutex_lock(&thread->mutex);
-    thread->suspended = 0;
-    pthread_cond_signal(&thread->cond);
-    pthread_mutex_unlock(&thread->mutex);
     return RT_EOK;
 }
 RTM_EXPORT(rt_thread_resume);

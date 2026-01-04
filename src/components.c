@@ -15,6 +15,7 @@
  *                             in some IDEs.
  * 2015-07-29     Arda.Fu      Add support to use RT_USING_USER_MAIN with IAR
  * 2018-11-22     Jesven       Add secondary cpu boot up
+ * 2026-01-04     leegartu     使用constructor特性模拟 COMPONENT 的初始化。
  */
 
 #include <rthw.h>
@@ -31,7 +32,7 @@
 
 #ifdef RT_USING_COMPONENTS_INIT
 #define COMPONENTS_ARRAY_MAX 32
-#define COMPONENTS_LEVEL 7
+#define COMPONENTS_LEVEL 8
 
 #if RT_DEBUG_INIT
 #define COMPOENENTS_TYPE const struct rt_init_desc*

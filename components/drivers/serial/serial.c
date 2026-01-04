@@ -26,6 +26,7 @@
  *                             when using interrupt tx
  * 2020-12-14     Meco Man     implement function of setting window's size(TIOCSWINSZ)
  * 2021-08-22     Meco Man     implement function of getting window's size(TIOCGWINSZ)
+ * 2026-01-04     leegartu     使用 pthread 模拟串口硬件接收中断
  */
 
 #include <rthw.h>
@@ -36,6 +37,13 @@
 #define DBG_TAG    "UART"
 #define DBG_LVL    DBG_INFO
 #include <rtdbg.h>
+
+// 控制结构
+typedef struct {
+    bool paused;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} thread_control_t;
 
 // 全局控制变量（实际项目中建议封装）
 thread_control_t ctrl = {

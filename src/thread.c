@@ -31,6 +31,7 @@
  * 2021-12-27     Meco Man     remove .init_priority
  * 2022-01-07     Gabriel      Moving __on_rt_xxxxx_hook to thread.c
  * 2022-01-24     THEWON       let rt_thread_sleep return thread->error when using signal
+ * 2026-01-04     leegartu     使用pthread模拟线程api
  */
 
 #include <rthw.h>

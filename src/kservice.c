@@ -21,6 +21,7 @@
  * 2021-12-20     Meco Man     implement rt_strcpy()
  * 2022-01-07     Gabriel      add __on_rt_assert_hook
  * 2022-06-04     Meco Man     remove strnlen
+ * 2026-01-04     leegartu     使用libc代替rtthread的相关实现
  */
 
 #include <rtthread.h>

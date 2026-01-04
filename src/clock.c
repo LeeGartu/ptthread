@@ -15,6 +15,7 @@
  * 2018-11-22     Jesven       add per cpu tick
  * 2020-12-29     Meco Man     implement rt_tick_get_millisecond()
  * 2021-06-01     Meco Man     add critical section projection for rt_tick_increase()
+ * 2026-01-04     leegartu     使用time库模拟1ms定时器逻辑
  */
 
 #include <rthw.h>

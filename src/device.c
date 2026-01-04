@@ -396,4 +396,32 @@ rt_err_t rt_device_set_tx_complete(rt_device_t dev,
 }
 RTM_EXPORT(rt_device_set_tx_complete);
 
+/**
+ * @brief This function will enable or disable a device as a wakeup source.
+ *
+ * @param dev is the pointer of device driver structure.
+ *
+ * @param enable is the enable or disable cmd to device.
+ *
+ * @return RT_EOK
+ */
+rt_err_t rt_device_wakeup_enable(rt_device_t dev, rt_bool_t enable)
+{
+    /* parameter check */
+    RT_ASSERT(dev != RT_NULL);
+    RT_ASSERT(rt_object_get_type(&dev->parent) == RT_Object_Class_Device);
+
+    if (enable)
+    {
+        dev->flag |= RT_DEVICE_FLAG_WAKEUP;
+    }
+    else
+    {
+        dev->flag &= ~RT_DEVICE_FLAG_WAKEUP;
+    }
+
+    return RT_EOK;
+}
+RTM_EXPORT(rt_device_wakeup_enable);
+
 #endif /* RT_USING_DEVICE */

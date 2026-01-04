@@ -44,6 +44,8 @@
  * 2022-04-20     Meco Man     change version number to v4.1.1
  * 2022-04-21     THEWON       add macro RT_VERSION_CHECK
  * 2022-06-29     Meco Man     add RT_USING_LIBC and standard libc headers
+ * 2026-01-04     leegartu     添加一些标准库和pthread库。使用constructor特性模拟 COMPONENT 的初始化。
+ *                             使用pthread特性，模拟IPC逻辑。
  */
 
 #ifndef __RT_DEF_H__
@@ -66,13 +68,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// 控制结构
-typedef struct {
-    bool paused;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} thread_control_t;
 
 /**
  * @addtogroup BasicDef
@@ -311,6 +306,8 @@ typedef int (*init_fn_t)(void);
 #define INIT_ENV_EXPORT(fn)             INIT_EXPORT(fn, "5")
 /* application initialization (rtgui application etc ...) */
 #define INIT_APP_EXPORT(fn)             INIT_EXPORT(fn, "6")
+/* late application initialization (backgroud application etc ...) */
+#define INIT_LATE_APP_EXPORT(fn)        INIT_EXPORT(fn, "7")
 
 #if !defined(RT_USING_FINSH)
 /* define these to empty, even if not include finsh.h file */
@@ -970,6 +967,7 @@ enum rt_device_class_type
     RT_Device_Class_DAC,                                /**< DAC device */
     RT_Device_Class_WDT,                                /**< WDT device */
     RT_Device_Class_PWM,                                /**< PWM device */
+    RT_Device_Class_CAMERA,                             /**< Camera device */
     RT_Device_Class_Unknown                             /**< unknown device */
 };
 
@@ -987,6 +985,7 @@ enum rt_device_class_type
 #define RT_DEVICE_FLAG_ACTIVATED        0x010           /**< device is activated */
 #define RT_DEVICE_FLAG_SUSPENDED        0x020           /**< device is suspended */
 #define RT_DEVICE_FLAG_STREAM           0x040           /**< stream mode */
+#define RT_DEVICE_FLAG_WAKEUP           0x080           /**< wakeup source*/
 
 #define RT_DEVICE_FLAG_INT_RX           0x100           /**< INT mode on Rx */
 #define RT_DEVICE_FLAG_DMA_RX           0x200           /**< DMA mode on Rx */

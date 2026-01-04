@@ -42,6 +42,7 @@
  * 2022-01-07     Gabriel      Moving __on_rt_xxxxx_hook to ipc.c
  * 2022-01-24     THEWON       let rt_mutex_take return thread->error when using signal
  * 2022-04-08     Stanley      Correct descriptions
+ * 2026-01-04     leegartu     使用pthread特性，模拟IPC逻辑。
  */
 
 #include <rtthread.h>
